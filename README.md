@@ -1,14 +1,17 @@
-# ProcureFlow AI — DATABASE_URL error fixed (local demo)
+# ProcureFlow AI — Firestore-backed demo
 
-## Start
-```powershell
-npm install
-Copy-Item .env.example .env.local
-npm run dev
-```
-Open http://localhost:3000. **No DATABASE_URL required.** Demo RFQs are initialized automatically. Groq AI works when `GROQ_API_KEY` is configured.
+This version fixes `/api/rfqs` POST failing on Vercel due to writing local JSON files. The existing UI and readable CSS are preserved.
 
-## Important limits
-This build replaces the PostgreSQL RFQ API with a local JSON-file demo store (`.procureflow-demo-data.json`). It is **not connected to Firebase**, even if Firebase environment variables are set. The JSON store persists locally but is **not suitable for Vercel production**, whose filesystem is ephemeral/read-only. Authentication, authorization, concurrent multi-user safety, full bid validation, and production audit guarantees are not implemented. Do not use for real procurement or confidential vendor data. For Vercel, the API must be migrated to Firestore or another durable database.
+## Setup
+1. Create a Firebase project and enable **Firestore Database**.
+2. Firebase Console → Project settings → Service accounts → Generate new private key. **Never commit or upload that JSON key.**
+3. Copy `.env.example` to `.env.local` and enter your values. Map the service account JSON `project_id`, `client_email`, `private_key` to `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`.
+4. On Vercel → Project → Settings → Environment Variables, add the same values for Production (and Preview if needed). Redeploy.
+5. Run `npm install` then `npm run dev` locally; `npm run build` to verify.
 
-The original PostgreSQL schema and seed files are retained only as reference; they are no longer imported by the API.
+## Security and limitations
+- This is a **demo**, not production-ready: the existing API endpoints do not authenticate users or enforce buyer/vendor roles. Anyone who can reach the endpoints can change data. **Do not use for real procurement data or publish publicly without authentication and authorization.**
+- Server Admin SDK bypasses Firestore Security Rules; API authorization must be implemented separately.
+- The demo uses one Firestore document (`procureflowDemo/workspace`) for compatibility with the existing APIs. Firestore documents have a **1 MiB limit**. Production requires separate collections, role checks, and immutable audit logs.
+- Real email reminders, vendor identity, and secure bidding are not implemented.
+- `.env.local` is intentionally excluded from the ZIP. Never put service-account private keys in `NEXT_PUBLIC_` variables.

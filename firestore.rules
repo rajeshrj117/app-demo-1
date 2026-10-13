@@ -1,0 +1,8 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Demo data is accessed exclusively by the server Admin SDK.
+    // Do not expose procurement records directly to untrusted clients.
+    match /{document=**} { allow read, write: if false; }
+  }
+}

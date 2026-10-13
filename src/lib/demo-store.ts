@@ -1,7 +1,6 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
+import { adminDb } from "@/lib/firebase-admin";
 import { randomUUID } from "node:crypto";
-const file = path.join(process.cwd(), ".procureflow-demo-data.json");
+const storeRef = () => adminDb().collection("procureflowDemo").doc("workspace");
 export const uid = () => randomUUID();
 export type Store = { rfqs: any[]; vendors: any[]; items: any[]; quotes: any[]; bids: any[]; auditLogs: any[]; comments: any[]; counterBids: any[]; purchaseOrders: any[] };
 const now = () => new Date().toISOString();
@@ -13,9 +12,25 @@ function initial(): Store {
  vendors.forEach((vendor,i)=>{let initialTotal=0,finalTotal=0;items.forEach((item,j)=>{const unit=[18450,12680,39200][j]*(1+i*.035);const revised=unit*.93;initialTotal+=unit*Number(item.qty);finalTotal+=revised*Number(item.qty);if(i<3){bids.push({id:uid(),rfqId:"rfq-1",vendorId:vendor.id,itemId:item.id,unitPrice:unit.toFixed(2),kind:"initial",createdAt:new Date(Date.now()-3600000).toISOString()},{id:uid(),rfqId:"rfq-1",vendorId:vendor.id,itemId:item.id,unitPrice:revised.toFixed(2),kind:"revised",createdAt:now()});}});quotes.push({id:uid(),rfqId:"rfq-1",vendorId:vendor.id,status:i===3?"Pending":"Submitted",initialTotal:i===3?"0":initialTotal.toFixed(2),finalTotal:i===3?"0":finalTotal.toFixed(2),otherCharges:"0",rank:i===3?null:i+1,comment:null,updatedAt:now()});});
  return {rfqs,vendors,items,quotes,bids,auditLogs:[{id:uid(),rfqId:"rfq-1",actorId:"Demo Buyer",action:"Demo RFQ created",details:{},createdAt:now()}],comments:[],counterBids:[],purchaseOrders:[]};
 }
-let lock=Promise.resolve();
-export async function readStore():Promise<Store>{try{return JSON.parse(await fs.readFile(file,"utf8"));}catch(e:any){if(e.code!=="ENOENT")throw e;const data=initial();await fs.writeFile(file,JSON.stringify(data,null,2));return data;}}
-export async function mutate<T>(fn:(s:Store)=>T|Promise<T>):Promise<T>{let release!:()=>void;const prev=lock;lock=new Promise<void>(r=>release=r);await prev;try{const s=await readStore();const result=await fn(s);await fs.writeFile(file,JSON.stringify(s,null,2));return result;}finally{release();}}
+// Firestore transaction ensures concurrent Vercel requests do not overwrite each other.
+// This single-document model is suitable for a small demo only (Firestore 1 MiB/document limit).
+export async function readStore():Promise<Store>{
+ const snap=await storeRef().get();
+ if(snap.exists)return snap.data() as Store;
+ const seed=initial();
+ try { await storeRef().create(seed); return seed; }
+ catch { const latest=await storeRef().get(); if(latest.exists)return latest.data() as Store; throw new Error("Unable to initialize Firestore demo workspace"); }
+}
+export async function mutate<T>(fn:(s:Store)=>T|Promise<T>):Promise<T>{
+ return adminDb().runTransaction(async tx=>{
+   const ref=storeRef();
+   const snap=await tx.get(ref);
+   const store=snap.exists ? snap.data() as Store : initial();
+   const result=await fn(store);
+   tx.set(ref,store);
+   return result;
+ });
+}
 export function log(s:Store,rfqId:string,actorId:string,action:string,details:any={},reason?:string){s.auditLogs.unshift({id:uid(),rfqId,actorId,action,details,reason:reason??null,createdAt:now()});}
 export function detail(s:Store,id:string){const rfq=s.rfqs.find(r=>r.id===id);if(!rfq)return null;const enrich=(x:any)=>({...x,vendor:s.vendors.find(v=>v.id===x.vendorId)??null,item:s.items.find(i=>i.id===x.itemId)??null});return {rfq,items:s.items.filter(x=>x.rfqId===id),quotes:s.quotes.filter(x=>x.rfqId===id).map(enrich),bids:s.bids.filter(x=>x.rfqId===id).map(enrich).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)),auditLogs:s.auditLogs.filter(x=>x.rfqId===id),comments:s.comments.filter(x=>x.rfqId===id).map(enrich),counterBids:s.counterBids.filter(x=>x.rfqId===id).map(enrich),purchaseOrders:s.purchaseOrders};}
 export function rank(s:Store,id:string){s.quotes.filter(q=>q.rfqId===id&&!["Pending","Rejected","Frozen"].includes(q.status)).sort((a,b)=>Number(a.finalTotal)-Number(b.finalTotal)).forEach((q,i)=>q.rank=i+1);}
